@@ -8,12 +8,12 @@ Parameters:
   AlertEmail:
     Type: String
     Default: ""
-    Description: Optional. Email for escalations. You must confirm the SNS subscription email.
+    Description: Email for escalations and operational alarms. You must confirm the SNS subscription email.
   SiteCode:
     Type: String
     Default: ""
     NoEcho: true
-    Description: Optional shared code required to open a lockout. Empty means open (demo).
+    Description: Optional shared code required to open a lockout. Empty means open (throttled).
   AuditRetentionDays:
     Type: Number
     Default: 1
@@ -30,13 +30,21 @@ Globals:
     CodeUri: src/
     MemorySize: 256
     Timeout: 20
+    Tracing: Active
+    LoggingConfig:
+      LogFormat: JSON
+      ApplicationLogLevel: INFO
+      LogGroup: !Ref AppLogGroup
     Environment:
       Variables:
         TABLE: !Ref Table
 
 Resources:
+  # ---------- data ----------
   Table:
     Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
@@ -45,9 +53,13 @@ Resources:
       KeySchema:
         - { AttributeName: PK, KeyType: HASH }
         - { AttributeName: SK, KeyType: RANGE }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      TimeToLiveSpecification: { AttributeName: ttl, Enabled: true }
 
   AuditBucket:
     Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       ObjectLockEnabled: true
       VersioningConfiguration: { Status: Enabled }
@@ -60,6 +72,34 @@ Resources:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
 
+  AuditBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AuditBucket
+      PolicyDocument:
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource: [!GetAtt AuditBucket.Arn, !Sub "${AuditBucket.Arn}/*"]
+            Condition: { Bool: { "aws:SecureTransport": "false" } }
+
+  # ---------- logs, alerts ----------
+  AppLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { RetentionInDays: 30 }
+
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { RetentionInDays: 30 }
+
+  WorkflowLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/vendedlogs/states/${AWS::StackName}-workflow"
+      RetentionInDays: 30
+
   AlertTopic:
     Type: AWS::SNS::Topic
 
@@ -71,19 +111,31 @@ Resources:
       Protocol: email
       Endpoint: !Ref AlertEmail
 
+  # ---------- API ----------
   Api:
     Type: AWS::Serverless::HttpApi
     Properties:
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","route":"$context.routeKey","status":$context.status,"latencyMs":$context.responseLatency,"integrationError":"$context.integrationErrorMessage"}'
       DefaultRouteSettings:
-        ThrottlingBurstLimit: 20
-        ThrottlingRateLimit: 10
+        DetailedMetricsEnabled: true
+        ThrottlingBurstLimit: 100
+        ThrottlingRateLimit: 50
+      RouteSettings:
+        "POST /jobs":
+          DetailedMetricsEnabled: true
+          ThrottlingBurstLimit: 5
+          ThrottlingRateLimit: 2
 
   UiFunction:
     Type: AWS::Serverless::Function
     Properties:
       Handler: ui.handler
       Events:
-        Get: { Type: HttpApi, Properties: { ApiId: !Ref Api, Path: /, Method: GET } }
+        Root: { Type: HttpApi, Properties: { ApiId: !Ref Api, Path: /, Method: GET } }
+        Assets: { Type: HttpApi, Properties: { ApiId: !Ref Api, Path: "/assets/{file}", Method: GET } }
+        NotFound: { Type: HttpApi, Properties: { ApiId: !Ref Api, Path: "/{proxy+}", Method: GET } }
 
   OpenJobFunction:
     Type: AWS::Serverless::Function
@@ -94,8 +146,10 @@ Resources:
           STATE_MACHINE_ARN: !Ref QuorumMachine
           SITE_CODE: !Ref SiteCode
       Policies:
-        - DynamoDBCrudPolicy: { TableName: !Ref Table }
         - Statement:
+            - Effect: Allow
+              Action: [dynamodb:PutItem, dynamodb:UpdateItem]
+              Resource: !GetAtt Table.Arn
             - { Effect: Allow, Action: states:StartExecution, Resource: !Ref QuorumMachine }
       Events:
         Post: { Type: HttpApi, Properties: { ApiId: !Ref Api, Path: /jobs, Method: POST } }
@@ -105,8 +159,10 @@ Resources:
     Properties:
       Handler: act.handler
       Policies:
-        - DynamoDBCrudPolicy: { TableName: !Ref Table }
         - Statement:
+            - Effect: Allow
+              Action: [dynamodb:Query, dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem]
+              Resource: !GetAtt Table.Arn
             - { Effect: Allow, Action: states:SendTaskSuccess, Resource: "*" }
       Events:
         Post: { Type: HttpApi, Properties: { ApiId: !Ref Api, Path: "/jobs/{jobId}/act", Method: POST } }
@@ -116,7 +172,11 @@ Resources:
     Properties:
       Handler: status.handler
       Policies:
-        - DynamoDBReadPolicy: { TableName: !Ref Table }
+        - Statement:
+            - { Effect: Allow, Action: dynamodb:Query, Resource: !GetAtt Table.Arn }
+            - Effect: Allow
+              Action: states:DescribeExecution
+              Resource: !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${QuorumMachine.Name}:*"
       Events:
         Get: { Type: HttpApi, Properties: { ApiId: !Ref Api, Path: "/jobs/{jobId}", Method: GET } }
 
@@ -129,8 +189,10 @@ Resources:
           BUCKET: !Ref AuditBucket
           RETENTION_DAYS: !Ref AuditRetentionDays
       Policies:
-        - DynamoDBCrudPolicy: { TableName: !Ref Table }
         - Statement:
+            - Effect: Allow
+              Action: [dynamodb:Query, dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:ConditionCheckItem]
+              Resource: !GetAtt Table.Arn
             - Effect: Allow
               Action: [s3:PutObject, s3:PutObjectRetention]
               Resource: !Sub "${AuditBucket.Arn}/audits/*"
@@ -142,8 +204,8 @@ Resources:
     Properties:
       Handler: register_token.handler
       Policies:
-        - DynamoDBCrudPolicy: { TableName: !Ref Table }
         - Statement:
+            - { Effect: Allow, Action: dynamodb:UpdateItem, Resource: !GetAtt Table.Arn }
             - { Effect: Allow, Action: states:SendTaskSuccess, Resource: "*" }
 
   FinalizeFunction:
@@ -151,8 +213,12 @@ Resources:
     Properties:
       Handler: finalize.handler
       Policies:
-        - DynamoDBCrudPolicy: { TableName: !Ref Table }
+        - Statement:
+            - Effect: Allow
+              Action: [dynamodb:Query, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:ConditionCheckItem]
+              Resource: !GetAtt Table.Arn
 
+  # ---------- workflow ----------
   QuorumMachine:
     Type: AWS::Serverless::StateMachine
     Properties:
@@ -162,10 +228,87 @@ Resources:
         RegisterTokenFunctionArn: !GetAtt RegisterTokenFunction.Arn
         FinalizeFunctionArn: !GetAtt FinalizeFunction.Arn
         AlertTopicArn: !Ref AlertTopic
+      Tracing: { Enabled: true }
+      Logging:
+        Level: ERROR
+        IncludeExecutionData: false
+        Destinations:
+          - CloudWatchLogsLogGroup: { LogGroupArn: !GetAtt WorkflowLogGroup.Arn }
       Policies:
         - LambdaInvokePolicy: { FunctionName: !Ref RegisterTokenFunction }
         - LambdaInvokePolicy: { FunctionName: !Ref FinalizeFunction }
         - SNSPublishMessagePolicy: { TopicName: !GetAtt AlertTopic.TopicName }
+        - Statement: # log delivery APIs do not support resource-level permissions
+            - Effect: Allow
+              Action:
+                - logs:CreateLogDelivery
+                - logs:GetLogDelivery
+                - logs:UpdateLogDelivery
+                - logs:DeleteLogDelivery
+                - logs:ListLogDeliveries
+                - logs:PutResourcePolicy
+                - logs:DescribeResourcePolicies
+                - logs:DescribeLogGroups
+              Resource: "*"
+
+  # ---------- alarms and dashboard ----------
+  ApiServerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: The API returned server errors. Check the board and the app log group.
+      Namespace: AWS/ApiGateway
+      MetricName: 5xx
+      Dimensions: [{ Name: ApiId, Value: !Ref Api }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+  FunctionErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: A LOTO Quorum Lambda function raised an error.
+      Threshold: 1
+      EvaluationPeriods: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      Metrics:
+        - { Id: errors, Expression: "SUM(METRICS())", Label: Lambda errors }
+        - { Id: e1, ReturnData: false, MetricStat: { Metric: { Namespace: AWS/Lambda, MetricName: Errors, Dimensions: [{ Name: FunctionName, Value: !Ref OpenJobFunction }] }, Period: 300, Stat: Sum } }
+        - { Id: e2, ReturnData: false, MetricStat: { Metric: { Namespace: AWS/Lambda, MetricName: Errors, Dimensions: [{ Name: FunctionName, Value: !Ref ActFunction }] }, Period: 300, Stat: Sum } }
+        - { Id: e3, ReturnData: false, MetricStat: { Metric: { Namespace: AWS/Lambda, MetricName: Errors, Dimensions: [{ Name: FunctionName, Value: !Ref RestartFunction }] }, Period: 300, Stat: Sum } }
+        - { Id: e4, ReturnData: false, MetricStat: { Metric: { Namespace: AWS/Lambda, MetricName: Errors, Dimensions: [{ Name: FunctionName, Value: !Ref RegisterTokenFunction }] }, Period: 300, Stat: Sum } }
+        - { Id: e5, ReturnData: false, MetricStat: { Metric: { Namespace: AWS/Lambda, MetricName: Errors, Dimensions: [{ Name: FunctionName, Value: !Ref FinalizeFunction }] }, Period: 300, Stat: Sum } }
+
+  WorkflowFailedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: A lockout workflow failed or timed out. The job stays locked out; open a new lockout.
+      Threshold: 1
+      EvaluationPeriods: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      Metrics:
+        - { Id: bad, Expression: "failed + timedout", Label: Failed or timed-out workflows }
+        - { Id: failed, ReturnData: false, MetricStat: { Metric: { Namespace: AWS/States, MetricName: ExecutionsFailed, Dimensions: [{ Name: StateMachineArn, Value: !Ref QuorumMachine }] }, Period: 300, Stat: Sum } }
+        - { Id: timedout, ReturnData: false, MetricStat: { Metric: { Namespace: AWS/States, MetricName: ExecutionsTimedOut, Dimensions: [{ Name: StateMachineArn, Value: !Ref QuorumMachine }] }, Period: 300, Stat: Sum } }
+
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${AWS::StackName}"
+      DashboardBody: !Sub |
+        {"widgets":[
+          {"type":"metric","x":0,"y":0,"width":12,"height":6,"properties":{"title":"API requests and server errors","region":"${AWS::Region}","stat":"Sum","period":300,"metrics":[["AWS/ApiGateway","Count","ApiId","${Api}"],[".","5xx",".","."],[".","4xx",".","."]]}},
+          {"type":"metric","x":12,"y":0,"width":12,"height":6,"properties":{"title":"Lockout workflows","region":"${AWS::Region}","stat":"Sum","period":300,"metrics":[["AWS/States","ExecutionsStarted","StateMachineArn","${QuorumMachine}"],[".","ExecutionsFailed",".","."],[".","ExecutionsTimedOut",".","."],[".","ExecutionsAborted",".","."]]}},
+          {"type":"metric","x":0,"y":6,"width":12,"height":6,"properties":{"title":"Lambda errors","region":"${AWS::Region}","stat":"Sum","period":300,"metrics":[["AWS/Lambda","Errors","FunctionName","${ActFunction}"],["...","${OpenJobFunction}"],["...","${RestartFunction}"],["...","${RegisterTokenFunction}"],["...","${FinalizeFunction}"]]}},
+          {"type":"metric","x":12,"y":6,"width":12,"height":6,"properties":{"title":"Lambda p95 duration (ms)","region":"${AWS::Region}","stat":"p95","period":300,"metrics":[["AWS/Lambda","Duration","FunctionName","${ActFunction}"],["...","${StatusFunction}"],["...","${RestartFunction}"]]}}
+        ]}
 
 Outputs:
   AppUrl:
@@ -177,3 +320,5 @@ Outputs:
     Value: !Ref AuditBucket
   AlertTopicArn:
     Value: !Ref AlertTopic
+  DashboardUrl:
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${AWS::StackName}"

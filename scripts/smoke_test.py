@@ -41,6 +41,16 @@ def call(method, path, body=None):
         return e.code, json.loads(e.read() or b"{}")
 
 
+def raw(path, gzip_ok=False):
+    """Fetch a non-JSON resource and return (status, headers, body bytes)."""
+    req = urllib.request.Request(BASE + path, headers={"Accept-Encoding": "gzip"} if gzip_ok else {})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status, r.headers, r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers, e.read()
+
+
 def open_job(names, **kw):
     code, d = call("POST", "/jobs", {"machine": "Press Line 4", "supervisor": "Sam", "roster": names, "siteCode": SITE, **kw})
     assert code == 201, (code, d)
@@ -77,6 +87,29 @@ def chain_ok(s):
     return rules.verify_chain(s["events"], s["lastHash"], s["seq"])[0] and s["chain"]["ok"]
 
 
+def scenario_front_door():
+    print("\n[0] Front door: static site, security headers, 404s, input limits")
+    code, hdr, body = raw("/")
+    csp = hdr.get("Content-Security-Policy", "")
+    check("home page is served as HTML", code == 200 and "text/html" in hdr["Content-Type"] and b"LOTO Quorum" in body)
+    check("strict CSP: no inline script, no external origins", "script-src 'self'" in csp and "default-src 'none'" in csp and "http" not in csp)
+    check("clickjacking and sniffing protections", "frame-ancestors 'self'" in csp and hdr.get("X-Content-Type-Options") == "nosniff")
+    check("HSTS is set", "max-age=" in hdr.get("Strict-Transport-Security", ""))
+    css_path = next(p for p in body.decode().split('"') if p.startswith("/assets/app.css"))
+    code, hdr, body = raw(css_path, gzip_ok=True)
+    check("assets are immutable-cached and gzip-compressed", code == 200 and "immutable" in hdr["Cache-Control"] and hdr.get("Content-Encoding") == "gzip")
+    code, hdr, _ = raw("/assets/geist.woff2")
+    check("fonts are self-hosted (no third-party requests)", code == 200 and hdr["Content-Type"] == "font/woff2")
+    code, _, body = raw("/does-not-exist")
+    check("unknown page gets the branded 404", code == 404 and b"doesn't exist" in body)
+    code, _, body = raw("/assets/..%2f..%2fcommon.py")
+    check("asset route cannot read source files", code in (400, 404) and b"import" not in body)
+    code, hdr, _ = raw("/jobs/doesnotexist")
+    check("unknown job is a JSON 404 with security headers", code == 404 and hdr.get("X-Content-Type-Options") == "nosniff")
+    check("oversized request body is rejected", call("POST", "/jobs", {"machine": "x" * 20000, "supervisor": "s", "roster": ["a"]})[0] == 413)
+    check("non-object body is rejected", call("POST", "/jobs", ["a"])[0] == 400)
+
+
 def scenario_main():
     print("\n[1] Press Line 4: Asha, Ben, Chen (refusals, handover, restart, seal)")
     job, sup, w = open_job(["Asha", "Ben", "Chen"])
@@ -97,6 +130,10 @@ def scenario_main():
     check("Ben hands his lock to Dana", code == 200 and d["holder"] == "Dana", d)
     dana = {"slot": w["Ben"]["slot"], "key": d.get("key")}
     check("Ben's old link stops working", act(job, w["Ben"], "release")[0] == 403)
+    code, d = act(job, w["Ben"], "check")
+    check("link check says Ben's old link is no longer active", code == 200 and d.get("valid") is False, d)
+    code, d = act(job, dana, "check")
+    check("link check says Dana's new link is active", code == 200 and d.get("valid") is True, d)
     s = status(job)
     check("the lock never came off during handover", [l["state"] for l in s["locks"] if l["holder"] == "Dana"] == ["LOCKED"])
     check("override without the confirmation is refused", call("POST", f"/jobs/{job}/act", {"action": "override", "slot": "L3", "key": sup, "reason": "went home early"})[0] == 400)
@@ -172,6 +209,7 @@ if __name__ == "__main__":
     ap.add_argument("--region", default="us-east-1")
     a = ap.parse_args()
     BASE, SITE = a.url.rstrip("/"), a.site_code
+    scenario_front_door()
     scenario_main()
     scenario_override()
     scenario_concurrency()

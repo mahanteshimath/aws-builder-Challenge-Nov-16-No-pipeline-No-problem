@@ -3,9 +3,10 @@ import hmac
 import json
 import os
 import secrets
+import time
 
 import rules
-from common import DB, SFN, T, TABLE, Refuse, api, body_of, digest, new_key, now, reply, text
+from common import DB, SFN, T, TABLE, TTL_DAYS, Refuse, api, body_of, digest, log, new_key, now, reply, text
 
 SITE_CODE = os.environ.get("SITE_CODE", "")
 MACHINE = os.environ["STATE_MACHINE_ARN"]
@@ -40,13 +41,13 @@ def handler(event, ctx):
     ev = {"seq": 1, "ts": opened, "type": "JOB_OPENED", "actor": supervisor,
           "detail": f"{machine}: {len(names)} locks required ({', '.join(names)})"}
     h = rules.event_hash(rules.GENESIS, ev)
-    pk = f"JOB#{job_id}"
+    pk, ttl = f"JOB#{job_id}", {"ttl": int(time.time()) + TTL_DAYS * 86400}
     items = [
         {"PK": pk, "SK": "META", "jobId": job_id, "machine": machine, "supervisor": supervisor,
-         "supKeyHash": digest(sup_key), "status": "LOCKED_OUT", "seq": 1, "lastHash": h, "openedAt": opened},
-        {"PK": pk, "SK": "EVT#000001", **ev, "prevHash": rules.GENESIS, "hash": h},
+         "supKeyHash": digest(sup_key), "status": "LOCKED_OUT", "seq": 1, "lastHash": h, "openedAt": opened, **ttl},
+        {"PK": pk, "SK": "EVT#000001", **ev, "prevHash": rules.GENESIS, "hash": h, **ttl},
         *[{"PK": pk, "SK": f"LOCK#{w['slot']}", "slot": w["slot"], "holder": w["name"],
-           "keyHash": digest(w["key"]), "state": rules.AWAITING} for w in workers],
+           "keyHash": digest(w["key"]), "state": rules.AWAITING, **ttl} for w in workers],
     ]
     DB.transact_write_items(TransactItems=[{"Put": {"TableName": TABLE, "Item": i}} for i in items])
 
@@ -57,7 +58,7 @@ def handler(event, ctx):
                               "roster": [{"slot": w["slot"], "name": w["name"]} for w in workers]}),
         )["executionArn"]
     except Exception as e:
-        print("start_execution failed", repr(e))
+        log.error("start_execution failed: %r", e)
         raise Refuse(502, "workflow failed to start; the job stays locked out. Open a new lockout.", jobId=job_id)
     T.update_item(Key={"PK": pk, "SK": "META"}, UpdateExpression="SET executionArn = :a",
                   ExpressionAttributeValues={":a": arn})

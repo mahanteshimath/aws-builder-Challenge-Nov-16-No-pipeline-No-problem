@@ -4,6 +4,7 @@ import functools
 import hashlib
 import hmac
 import json
+import logging
 import os
 import random
 import secrets
@@ -13,15 +14,20 @@ from decimal import Decimal
 
 import boto3
 from boto3.dynamodb.conditions import Key
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 import rules
 
 TABLE = os.environ["TABLE"]
+MAX_BODY = 16 * 1024
+TTL_DAYS = 100  # items expire this long after the job opens; the sealed S3 audit outlives them
 _db = boto3.resource("dynamodb")
 T = _db.Table(TABLE)
 DB = _db.meta.client
-SFN = boto3.client("stepfunctions")
+SFN = boto3.client("stepfunctions", config=Config(retries={"max_attempts": 5, "mode": "standard"}))
+log = logging.getLogger()
+log.setLevel(logging.INFO)
 
 
 class Refuse(Exception):
@@ -101,6 +107,7 @@ def commit(job, etype, actor, detail, ops=(), meta_set=None):
     seq = int(job["seq"]) + 1
     ev = {"seq": seq, "ts": now(), "type": etype, "actor": actor, "detail": detail}
     h = rules.event_hash(job["lastHash"], ev)
+    ttl = {"ttl": job["ttl"]} if "ttl" in job else {}
     names = {"#sq": "seq", "#lh": "lastHash"}
     vals = {":n": seq, ":h": h, ":c": int(job["seq"])}
     sets = ["#sq = :n", "#lh = :h"]
@@ -109,7 +116,7 @@ def commit(job, etype, actor, detail, ops=(), meta_set=None):
         sets.append(f"#m{i} = :m{i}")
     items = [
         {"Put": {"TableName": TABLE, "ConditionExpression": "attribute_not_exists(PK)",
-                 "Item": {"PK": job["PK"], "SK": f"EVT#{seq:06d}", **ev, "prevHash": job["lastHash"], "hash": h}}},
+                 "Item": {"PK": job["PK"], "SK": f"EVT#{seq:06d}", **ev, "prevHash": job["lastHash"], "hash": h, **ttl}}},
         {"Update": {"TableName": TABLE, "Key": {"PK": job["PK"], "SK": "META"},
                     "UpdateExpression": "SET " + ", ".join(sets), "ConditionExpression": "#sq = :c",
                     "ExpressionAttributeNames": names, "ExpressionAttributeValues": vals}},
@@ -154,15 +161,25 @@ def _json(o):
     raise TypeError(type(o))
 
 
+SECURITY_HEADERS = {
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "Strict-Transport-Security": "max-age=63072000; includeSubDomains",
+    "Referrer-Policy": "no-referrer",
+}
+
+
 def reply(code, body):
     return {"statusCode": code, "body": json.dumps(body, default=_json),
-            "headers": {"Content-Type": "application/json", "Cache-Control": "no-store"}}
+            "headers": {"Content-Type": "application/json", **SECURITY_HEADERS}}
 
 
 def body_of(event):
     raw = event.get("body") or "{}"
     if event.get("isBase64Encoded"):
         raw = base64.b64decode(raw).decode()
+    if len(raw) > MAX_BODY:
+        raise Refuse(413, "request body too large")
     try:
         b = json.loads(raw)
     except ValueError:
@@ -179,4 +196,7 @@ def api(fn):
             return fn(event, ctx)
         except Refuse as r:
             return reply(r.code, {"error": r.msg, **r.extra})
+        except Exception:
+            log.exception("unhandled error")
+            return reply(500, {"error": "internal error. Check the board for the current state before retrying."})
     return wrapper

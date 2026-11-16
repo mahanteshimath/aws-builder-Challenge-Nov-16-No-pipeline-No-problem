@@ -1,9 +1,9 @@
 """POST /jobs/{jobId}/act: lock, release, handover (workers) and override (supervisor)."""
 import rules
-from common import (Refuse, api, body_of, commit, digest, lock_update, load, new_key, now, reply, retry, same,
-                    text, wake_waiters)
+from common import (Refuse, api, body_of, commit, digest, load, lock_update, log, new_key, now, reply, retry,
+                    same, text, wake_waiters)
 
-ACTIONS = ("lock", "release", "handover", "override")
+ACTIONS = ("lock", "release", "handover", "override", "check")
 NAMES = {"#s": "state", "#k": "keyHash"}
 
 
@@ -13,6 +13,8 @@ def run(job_id, b, action):
     lock = locks.get(slot) if isinstance(slot, str) else None
     if not lock:
         raise Refuse(404, "no such lock")
+    if action == "check":  # lets a link's owner confirm it still controls a lock (e.g. not handed over)
+        return {"valid": same(b.get("key"), lock["keyHash"])}
     if action == "override":
         if not same(b.get("key"), job["supKeyHash"]):
             raise Refuse(403, "supervisor key required")
@@ -67,9 +69,9 @@ def handler(event, ctx):
     if action not in ACTIONS:
         raise Refuse(400, f"action must be one of {', '.join(ACTIONS)}")
     res = retry(lambda: run(job_id, b, action))
-    if action != "handover":
+    if action not in ("handover", "check"):
         try:
             wake_waiters(job_id, b["slot"])
-        except Exception as e:  # the committed state is the truth; a missed wake-up recovers on the next timeout loop
-            print("wake failed", repr(e))
+        except Exception as e:  # the committed state is the truth; the workflow's timeout loop re-checks the lock
+            log.error("wake failed for job %s slot %s: %r", job_id, b.get("slot"), e)
     return reply(200, res)

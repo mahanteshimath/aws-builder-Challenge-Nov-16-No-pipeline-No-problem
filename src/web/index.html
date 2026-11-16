@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>LOTO Quorum: digital lockout/tagout for work crews</title>
+<meta name="description" content="Nobody restarts the machine while someone is still inside it. Every worker applies their own digital lock; the machine is cleared only when every lock is off. Serverless on AWS.">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ece8de" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#15130f" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="website">
+<meta property="og:title" content="LOTO Quorum">
+<meta property="og:description" content="The machine can't restart until every worker's lock is off. A serverless quorum gate for lockout/tagout.">
+<meta name="twitter:card" content="summary">
+<link rel="icon" id="favicon" type="image/svg+xml" href="/assets/favicon.svg?v=__V__">
+<script src="/assets/theme.js?v=__V__"></script>
+<link rel="preload" href="/assets/geist.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/assets/app.css?v=__V__">
+</head>
+<body>
+<a class="skip" href="#app">Skip to main content</a>
+<header class="top">
+  <a class="brand" href="/" aria-label="LOTO Quorum, home">
+    <svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 10.5V8a4.5 4.5 0 0 1 9 0v2.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="square"/><rect x="4.5" y="10.5" width="15" height="10" rx="1.5" fill="currentColor"/><rect x="11" y="13.5" width="2" height="4" fill="var(--bg)"/></svg>
+    LOTO Quorum <small>a digital layer for physical locks</small>
+  </a>
+  <div class="top-tools">
+    <span class="live" id="live" hidden><i></i><span id="live-text">Live</span></span>
+    <div class="seg" id="theme" role="group" aria-label="Colour theme"></div>
+  </div>
+</header>
+<main id="app" tabindex="-1" aria-busy="true">
+  <noscript><div class="empty"><h1>JavaScript is required.</h1><p>LOTO Quorum runs in your browser. If this page or the network is unavailable, the physical lockout procedure is the source of truth.</p></div></noscript>
+</main>
+<footer class="foot">
+  <p>Supplements physical locks and your written energy-control procedure. It never replaces them.</p>
+  <nav aria-label="Footer">
+    <button class="linkbtn" id="open-notice" type="button">Safety and data notice</button>
+    <a href="https://github.com/mahanteshimath/aws-builder-Challenge-Nov-16-No-pipeline-No-problem" rel="noopener">Source</a>
+  </nav>
+</footer>
+<dialog id="notice" aria-labelledby="notice-title">
+  <h2 id="notice-title">Safety and data notice</h2>
+  <p>LOTO Quorum records who has locked a machine and refuses a restart permission until every lock is off. It does not control machinery. It supplements physical locks and your site's written energy-control procedure; it never replaces them.</p>
+  <p>If this page or the network is unavailable, the physical procedure is the source of truth.</p>
+  <h3>What is stored</h3>
+  <p>A job keeps the machine name, the names you enter and timestamps. Those records expire 100 days after the job opens. The sealed audit file in S3 is retained for the period set at deployment. There are no cookies and no analytics. Your browser stores one thing: your theme choice.</p>
+  <button class="btn" id="close-notice" type="button">Close</button>
+</dialog>
+<div id="toasts" class="toasts" aria-live="polite"></div>
+<p id="announce" class="sr-only" role="status" aria-live="polite"></p>
+<script src="/assets/qrcode.js?v=__V__" defer></script>
+<script src="/assets/app.js?v=__V__" defer></script>
+</body>
+</html>

@@ -7,7 +7,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 import rules
-from common import Refuse, _json, api, body_of, commit, load, now, released_check, reply, retry, same, T, pk
+from common import Refuse, _json, api, body_of, commit, load, log, now, released_check, reply, retry, same, T, pk
 
 BUCKET = os.environ["BUCKET"]
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "1"))
@@ -26,7 +26,7 @@ def seal(job_id):
                       ContentType="application/json", ChecksumAlgorithm="SHA256",
                       ObjectLockMode="GOVERNANCE", ObjectLockRetainUntilDate=until)
     except ClientError as e:
-        print("seal failed", repr(e))
+        log.error("seal failed for job %s: %r", job_id, e)
         raise Refuse(502, "restart is authorized but sealing the audit failed; call restart again to retry the seal")
     T.update_item(Key={"PK": pk(job_id), "SK": "META"}, UpdateExpression="SET sealKey = :k, sealedAt = :t",
                   ExpressionAttributeValues={":k": key, ":t": now()})

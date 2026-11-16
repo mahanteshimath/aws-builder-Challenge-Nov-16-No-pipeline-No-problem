@@ -1,6 +1,7 @@
 {
   "Comment": "LOTO Quorum. The quorum IS the workflow: one Map branch per worker, and the Map ends only when every branch has seen its lock applied and then released. No path releases a lock; timeouts only alert and keep waiting.",
   "StartAt": "Quorum",
+  "TimeoutSeconds": 1209600,
   "States": {
     "Quorum": {
       "Type": "Map",
