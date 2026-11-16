@@ -1,0 +1,156 @@
+{
+  "Comment": "LOTO Quorum. The quorum IS the workflow: one Map branch per worker, and the Map ends only when every branch has seen its lock applied and then released. No path releases a lock; timeouts only alert and keep waiting.",
+  "StartAt": "Quorum",
+  "States": {
+    "Quorum": {
+      "Type": "Map",
+      "ItemsPath": "$.roster",
+      "ItemSelector": {
+        "jobId.$": "$.jobId",
+        "slot.$": "$$.Map.Item.Value.slot",
+        "name.$": "$$.Map.Item.Value.name",
+        "lockWait.$": "$.lockWaitSeconds",
+        "stuckWait.$": "$.stuckSeconds"
+      },
+      "MaxConcurrency": 0,
+      "ResultPath": null,
+      "ItemProcessor": {
+        "ProcessorConfig": { "Mode": "INLINE" },
+        "StartAt": "WaitLockApplied",
+        "States": {
+          "WaitLockApplied": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+            "Parameters": {
+              "FunctionName": "${RegisterTokenFunctionArn}",
+              "Payload": {
+                "jobId.$": "$.jobId",
+                "slot.$": "$.slot",
+                "phase": "LOCK",
+                "token.$": "$$.Task.Token"
+              }
+            },
+            "TimeoutSecondsPath": "$.lockWait",
+            "ResultPath": null,
+            "Retry": [
+              {
+                "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 6,
+                "BackoffRate": 2
+              },
+              {
+                "ErrorEquals": ["States.TaskFailed"],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              { "ErrorEquals": ["States.Timeout"], "ResultPath": "$.lastError", "Next": "AlertLockMissing" }
+            ],
+            "Next": "WaitLockReleased"
+          },
+          "AlertLockMissing": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sns:publish",
+            "Parameters": {
+              "TopicArn": "${AlertTopicArn}",
+              "Subject": "LOTO ESCALATION: lock not applied",
+              "Message.$": "States.Format('Job {}: {} has not applied their lock. The machine stays locked out. A supervisor must check.', $.jobId, $.name)"
+            },
+            "ResultPath": null,
+            "Next": "WaitLockApplied"
+          },
+          "WaitLockReleased": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+            "Parameters": {
+              "FunctionName": "${RegisterTokenFunctionArn}",
+              "Payload": {
+                "jobId.$": "$.jobId",
+                "slot.$": "$.slot",
+                "phase": "RELEASE",
+                "token.$": "$$.Task.Token"
+              }
+            },
+            "TimeoutSecondsPath": "$.stuckWait",
+            "ResultPath": null,
+            "Retry": [
+              {
+                "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 6,
+                "BackoffRate": 2
+              },
+              {
+                "ErrorEquals": ["States.TaskFailed"],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              { "ErrorEquals": ["States.Timeout"], "ResultPath": "$.lastError", "Next": "AlertStuckLock" }
+            ],
+            "Next": "LockDone"
+          },
+          "AlertStuckLock": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sns:publish",
+            "Parameters": {
+              "TopicArn": "${AlertTopicArn}",
+              "Subject": "LOTO ESCALATION: stuck lock",
+              "Message.$": "States.Format('Job {}: the lock held by {} is still on past its limit. It was NOT released automatically. A supervisor must verify and decide.', $.jobId, $.name)"
+            },
+            "ResultPath": null,
+            "Next": "WaitLockReleased"
+          },
+          "LockDone": { "Type": "Succeed" }
+        }
+      },
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "AlertWorkflowFailed" }
+      ],
+      "Next": "Finalize"
+    },
+    "Finalize": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${FinalizeFunctionArn}",
+        "Payload": { "jobId.$": "$.jobId" }
+      },
+      "ResultSelector": { "cleared.$": "$.Payload.cleared" },
+      "ResultPath": "$.finalize",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.failure", "Next": "AlertWorkflowFailed" }
+      ],
+      "End": true
+    },
+    "AlertWorkflowFailed": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${AlertTopicArn}",
+        "Subject": "LOTO ALERT: lockout workflow failed",
+        "Message.$": "States.Format('Job {}: the lockout workflow failed. The machine STAYS locked out. Open a new lockout.', $.jobId)"
+      },
+      "ResultPath": null,
+      "Next": "WorkflowFailed"
+    },
+    "WorkflowFailed": {
+      "Type": "Fail",
+      "Error": "LockoutWorkflowFailed",
+      "Cause": "The job stays locked out (fail safe). Open a new lockout."
+    }
+  }
+}
