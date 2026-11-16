@@ -1,6 +1,6 @@
 # LOTO Quorum: the machine can't restart until every worker's lock is off
 
-> **Demo video (under 3 minutes):** `https://youtu.be/________`
+> **Demo video (under 3 minutes):** [https://youtu.be/4QKF6SiACMg](https://youtu.be/4QKF6SiACMg)
 > **Built for:** AWS Builder Center Weekend Challenge, *No Pipeline, No Problem*
 > **Stack:** Lambda · API Gateway · DynamoDB · Step Functions · S3 Object Lock · SNS. One SAM template, no servers, no pipeline.
 

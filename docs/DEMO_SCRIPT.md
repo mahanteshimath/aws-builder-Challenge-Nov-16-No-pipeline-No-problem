@@ -1,6 +1,6 @@
 # Demo video script (target 2:50, hard limit under 3:00)
 
-Record one browser window plus the AWS console tabs. Voice-over, no music needed. Upload as **Public** to YouTube, paste the link in the Builder Center *demo* field and at the top of the README.
+Record one browser window plus the AWS console tabs. Voice-over, no music needed. Upload as **Public** to YouTube, paste the link in the Builder Center *demo* field and at the top of the README. Published: https://youtu.be/4QKF6SiACMg
 
 ## Before you hit record (5 minutes)
 1. **Alert email:** click the SNS confirmation link sent to mahanteshimath@gmail.com. Without it no escalation email arrives.
