@@ -39,22 +39,7 @@ _(Screenshots to add: board LOCKED OUT · restart refused · Step Functions Map 
 
 ## How the AWS services connect
 
-```mermaid
-flowchart LR
-  W["Worker phone / supervisor<br/>(single-page UI)"] --> API["API Gateway<br/>HTTP API"]
-  API --> L["Lambda x5<br/>open · act · status · restart · ui"]
-  L <-->|"TransactWriteItems<br/>lock + audit event, one commit"| DDB[("DynamoDB<br/>job · locks · hash-chained events")]
-  L -->|StartExecution| SFN
-  subgraph SFN["Step Functions (Standard)"]
-    direction TB
-    M["Map: one branch per worker<br/>wait 'lock applied' → wait 'lock released'<br/>(task tokens)"] --> F["Finalize: re-verify every lock<br/>→ CLEARED"]
-  end
-  SFN -->|"register token / finalize"| L2["Lambda x2<br/>register_token · finalize"]
-  L2 <--> DDB
-  L -->|"SendTaskSuccess on every change"| SFN
-  M -.->|"timeout: alert, keep waiting"| SNS["SNS<br/>escalation"]
-  L -->|"restart: seal with Object Lock"| S3[("S3<br/>audit, governance mode")]
-```
+![Architecture](docs/architecture.png)
 
 | Service | Job |
 |---|---|
@@ -97,6 +82,7 @@ Open the `AppUrl` output. Optional parameters: `AlertEmail` (confirm the SNS sub
 ```bash
 python tests/test_rules.py                                   # offline
 python scripts/smoke_test.py <AppUrl> --escalation --profile <profile> --region <region>
+python scripts/demo_job.py <AppUrl> --prelock Asha           # open a ready-to-use demo lockout and print every link
 ```
 
 ## Reuse the pattern

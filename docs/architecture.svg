@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1720" height="920" viewBox="0 0 1720 920" font-family="Segoe UI, Arial, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#344054"/></marker>
+    <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#b42318"/></marker>
+    <style>
+      .t { font-size: 15px; font-weight: 700; } .s { font-size: 12.5px; fill: #475467; } .l { font-size: 12.5px; fill: #344054; font-style: italic; }
+      .box { fill: #fff; stroke-width: 2; } .grp { stroke-width: 2; stroke-dasharray: 8 5; } .gl { font-size: 14px; font-weight: 700; }
+      .ln { stroke: #344054; stroke-width: 2.2; fill: none; marker-end: url(#a); }
+    </style>
+  </defs>
+  <rect width="1720" height="920" fill="#f8fafc"/>
+  <text x="40" y="52" font-size="30" font-weight="800" fill="#101828">LOTO Quorum: the machine can't restart until every worker's lock is off</text>
+  <text x="40" y="80" font-size="15" fill="#475467">Serverless only. One SAM template, no servers, no pipeline. The quorum is the workflow.</text>
+
+  <!-- clients + API Gateway -->
+  <rect class="box" x="40" y="360" width="200" height="110" rx="10" stroke="#475467"/>
+  <text class="t" x="140" y="400" text-anchor="middle" fill="#101828">Workers + supervisor</text>
+  <text class="s" x="140" y="423" text-anchor="middle">phones / browser</text>
+  <text class="s" x="140" y="441" text-anchor="middle">single-page board</text>
+  <rect class="box" x="300" y="360" width="170" height="110" rx="10" stroke="#E7157B"/>
+  <text class="t" x="385" y="400" text-anchor="middle" fill="#E7157B">API Gateway</text>
+  <text class="s" x="385" y="423" text-anchor="middle">HTTP API</text>
+  <text class="s" x="385" y="441" text-anchor="middle">throttled</text>
+  <path class="ln" d="M240 415H298"/><path class="ln" d="M470 415H538"/>
+
+  <!-- Lambda API group -->
+  <rect class="grp" x="540" y="130" width="260" height="560" rx="14" fill="#fff7ed" stroke="#ED7100"/>
+  <text class="gl" x="556" y="156" fill="#c2410c">AWS Lambda · Python 3.12 · arm64</text>
+  <g>
+    <rect class="box" x="560" y="175" width="220" height="70" rx="8" stroke="#ED7100"/><text class="t" x="670" y="205" text-anchor="middle" fill="#c2410c">ui · GET /</text><text class="s" x="670" y="227" text-anchor="middle">serves the single-page board</text>
+    <rect class="box" x="560" y="265" width="220" height="70" rx="8" stroke="#ED7100"/><text class="t" x="670" y="295" text-anchor="middle" fill="#c2410c">open_job · POST /jobs</text><text class="s" x="670" y="317" text-anchor="middle">job + locks + event #1, atomically</text>
+    <rect class="box" x="560" y="355" width="220" height="70" rx="8" stroke="#ED7100"/><text class="t" x="670" y="385" text-anchor="middle" fill="#c2410c">act · POST /jobs/{id}/act</text><text class="s" x="670" y="407" text-anchor="middle">lock · release · handover · override</text>
+    <rect class="box" x="560" y="445" width="220" height="70" rx="8" stroke="#ED7100"/><text class="t" x="670" y="475" text-anchor="middle" fill="#c2410c">status · GET /jobs/{id}</text><text class="s" x="670" y="497" text-anchor="middle">board data + live chain check</text>
+    <rect class="box" x="560" y="535" width="220" height="70" rx="8" stroke="#ED7100"/><text class="t" x="670" y="565" text-anchor="middle" fill="#c2410c">restart · POST …/restart</text><text class="s" x="670" y="587" text-anchor="middle">re-read every lock, then seal</text>
+  </g>
+
+  <!-- Step Functions -->
+  <rect class="grp" x="960" y="110" width="520" height="300" rx="14" fill="#fdf2f8" stroke="#E7157B"/>
+  <text class="gl" x="976" y="136" fill="#be185d">AWS Step Functions · Standard · one execution per job</text>
+  <rect class="box" x="985" y="155" width="300" height="235" rx="8" stroke="#E7157B"/>
+  <text class="t" x="1135" y="185" text-anchor="middle" fill="#be185d">Map: one branch per worker</text>
+  <text class="s" x="1135" y="215" text-anchor="middle">1. wait for "lock applied" (task token)</text>
+  <text class="s" x="1135" y="238" text-anchor="middle">2. wait for "lock released" (task token)</text>
+  <text class="s" x="1135" y="272" text-anchor="middle">Map ends only when EVERY branch ends</text>
+  <text class="s" x="1135" y="306" text-anchor="middle">timeout → SNS alert → keep waiting</text>
+  <text class="s" x="1135" y="329" text-anchor="middle">no path ever releases a lock</text>
+  <text class="s" x="1135" y="364" text-anchor="middle" font-weight="700">waiting costs nothing</text>
+  <rect class="box" x="1315" y="210" width="140" height="110" rx="8" stroke="#E7157B"/>
+  <text class="t" x="1385" y="244" text-anchor="middle" fill="#be185d">Finalize</text>
+  <text class="s" x="1385" y="268" text-anchor="middle">re-verify every</text>
+  <text class="s" x="1385" y="286" text-anchor="middle">lock → CLEARED</text>
+  <path class="ln" d="M1285 265H1313"/>
+
+  <!-- DynamoDB -->
+  <rect class="box" x="960" y="480" width="240" height="170" rx="10" stroke="#3B48CC"/>
+  <text class="t" x="1080" y="512" text-anchor="middle" fill="#3B48CC">Amazon DynamoDB</text>
+  <text class="s" x="1080" y="536" text-anchor="middle">single table, on-demand</text>
+  <text class="s" x="1080" y="566" text-anchor="middle">JOB · LOCK#n · EVT#n</text>
+  <text class="s" x="1080" y="590" text-anchor="middle">hash-chained audit events</text>
+  <text class="s" x="1080" y="614" text-anchor="middle">conditional writes only</text>
+
+  <!-- workflow Lambdas -->
+  <rect class="grp" x="1300" y="450" width="200" height="220" rx="14" fill="#fff7ed" stroke="#ED7100"/>
+  <text class="gl" x="1316" y="476" fill="#c2410c">Lambda (workflow)</text>
+  <rect class="box" x="1320" y="495" width="160" height="70" rx="8" stroke="#ED7100"/><text class="t" x="1400" y="525" text-anchor="middle" fill="#c2410c">register_token</text><text class="s" x="1400" y="547" text-anchor="middle">park token, no lost wake-up</text>
+  <rect class="box" x="1320" y="580" width="160" height="70" rx="8" stroke="#ED7100"/><text class="t" x="1400" y="610" text-anchor="middle" fill="#c2410c">finalize</text><text class="s" x="1400" y="632" text-anchor="middle">re-read all locks</text>
+
+  <!-- SNS -->
+  <rect class="box" x="1560" y="170" width="140" height="110" rx="10" stroke="#E7157B"/>
+  <text class="t" x="1630" y="204" text-anchor="middle" fill="#E7157B">Amazon SNS</text>
+  <text class="s" x="1630" y="228" text-anchor="middle">escalation email</text>
+  <text class="s" x="1630" y="246" text-anchor="middle">stuck / missing lock</text>
+
+  <!-- S3 -->
+  <rect class="box" x="540" y="740" width="260" height="110" rx="10" stroke="#3F8624"/>
+  <text class="t" x="670" y="774" text-anchor="middle" fill="#3F8624">Amazon S3 · Object Lock</text>
+  <text class="s" x="670" y="798" text-anchor="middle">governance mode</text>
+  <text class="s" x="670" y="818" text-anchor="middle">sealed, tamper-evident audit</text>
+
+  <!-- flows -->
+  <path class="ln" d="M800 300H958"/><text class="l" x="880" y="290" text-anchor="middle">StartExecution</text>
+  <path class="ln" d="M800 390H958"/><text class="l" x="880" y="380" text-anchor="middle">SendTaskSuccess</text>
+  <path class="ln" d="M800 570H958"/>
+  <text class="l" x="880" y="535" text-anchor="middle">TransactWriteItems:</text><text class="l" x="880" y="551" text-anchor="middle">lock + audit event</text><text class="l" x="880" y="567" text-anchor="middle" dy="-0">in ONE commit</text>
+  <path class="ln" d="M1385 410V448"/><text class="l" x="1395" y="434">invoke</text>
+  <path class="ln" d="M1300 560H1202"/><text class="l" x="1250" y="545" text-anchor="middle">read / write</text>
+  <path d="M1480 225H1558" stroke="#b42318" stroke-width="2.2" stroke-dasharray="7 5" fill="none" marker-end="url(#r)"/>
+  <text class="l" x="1519" y="214" text-anchor="middle" fill="#b42318">alert</text>
+  <path class="ln" d="M670 605V738"/><text class="l" x="684" y="670">seal on restart</text>
+
+  <text x="40" y="890" font-size="15" font-weight="700" fill="#067647">Idle cost ≈ $0 · waiting on a task token is free · supplements physical locks, never replaces them</text>
+</svg>
